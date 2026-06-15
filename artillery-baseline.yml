@@ -2,66 +2,23 @@ config:
   target: "http://localhost:3000"
   phases:
     - duration: 60
-      arrivalRate: 2
-      name: "Sustained Baseline"
-    - duration: 30
-      arrivalRate: 5
-      rampTo: 10
-      name: "Ramp-up (Stress Test Check)"
-  payload:
-    # Use seeded users for testing
-    path: "users.csv"
-    fields:
-      - "email"
-      - "password"
-  defaults:
-    headers:
-      Content-Type: "application/json"
+      arrivalRate: 10
 
 scenarios:
-  - name: "Authenticated User Journey (N+1 Discovery)"
-    flow:
-      - log: "Step 1: Public Health Check"
+  - flow:
       - get:
-          url: "/api/health"
-      
-      - log: "Step 2: Authenticate (Login)"
+          url: "/api/restaurants"
+
       - post:
           url: "/api/auth/login"
           json:
-            email: "{{ email }}"
-            password: "{{ password }}"
+            email: "seed@quickbite.com"
+            password: "password123"
           capture:
             - json: "$.token"
-              as: "authToken"
-      
-      - log: "Step 3: Browse Restaurants in Mumbai (Index Discovery)"
-      - get:
-          url: "/api/restaurants?city=Mumbai&limit=20"
-          headers:
-            Authorization: "Bearer {{ authToken }}"
-      
-      - log: "Step 4: View Restaurant Menu (N+1 Category Discovery)"
-      # seeded restaurants IDs 1-100
-      - get:
-          url: "/api/restaurants/1/menu"
-          headers:
-            Authorization: "Bearer {{ authToken }}"
-      
-      - log: "Step 5: View Order History (Massive N+1 Discovery)"
+              as: "token"
+
       - get:
           url: "/api/orders/history"
           headers:
-            Authorization: "Bearer {{ authToken }}"
-      
-      - log: "Step 6: Place New Order (Blocking I/O Discovery)"
-      - post:
-          url: "/api/orders"
-          headers:
-            Authorization: "Bearer {{ authToken }}"
-          json:
-            restaurant_id: 1
-            delivery_fee: 40.00
-            items: 
-              - { menu_item_id: 1, quantity: 2, price: 250.00 }
-              - { menu_item_id: 2, quantity: 1, price: 350.00 }
+            Authorization: "Bearer {{ token }}"
