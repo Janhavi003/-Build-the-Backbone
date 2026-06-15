@@ -3,67 +3,77 @@ const emailService = require('../lib/emailService');
 
 /**
  * Get Order History for the authenticated user.
- * 
- * [PLANTED PERFORMANCE PROBLEM 1]
- * This function exhibits a severe N+1 query problem. Instead of a single JOIN,
- * it fetches orders, then items, then menu details in a nested loop.
- * Performance will degrade exponentially as orders increase.
+ *
+ * PERFORMANCE FIX:
+ * Replaced N+1 queries with a single JOIN + json_agg query.
  */
 const getOrderHistory = async (req, res) => {
     const userId = req.user.id;
+    const page = parseInt(req.query.page || 1);
+    const limit = 20;
+    const offset = (page - 1) * limit;
 
     console.log(`[Order Controller] Fetching history for User #${userId}`);
 
-    // Query 1: Get all orders for this user
-    const ordersResult = await db.query(
-        'SELECT * FROM orders WHERE user_id = $1 ORDER BY order_date DESC',
-        [userId]
-    );
-    const orders = ordersResult.rows;
-
-    // // Get full order details for each order (N+1 query pattern)
-    // For each order, we fetch the items, then for each item, the menu item details.
-    const fullOrders = [];
-    
-    for (const order of orders) {
-        // Query 1+N: Get items for this order
-        const itemsResult = await db.query(
-            'SELECT * FROM order_items WHERE order_id = $1',
-            [order.id]
+    try {
+        const result = await db.query(
+            `
+            SELECT
+                o.id,
+                o.user_id,
+                o.restaurant_id,
+                o.total_amount,
+                o.delivery_fee,
+                o.status,
+                o.order_date,
+                COALESCE(
+                    json_agg(
+                        json_build_object(
+                            'order_item_id', oi.id,
+                            'menu_item_id', oi.menu_item_id,
+                            'quantity', oi.quantity,
+                            'unit_price', oi.unit_price,
+                            'subtotal', oi.subtotal,
+                            'menu_item', json_build_object(
+                                'id', mi.id,
+                                'name', mi.name,
+                                'price', mi.price,
+                                'category', mi.category
+                            )
+                        )
+                    ) FILTER (WHERE oi.id IS NOT NULL),
+                    '[]'
+                ) AS items
+            FROM orders o
+            LEFT JOIN order_items oi
+                ON oi.order_id = o.id
+            LEFT JOIN menu_items mi
+                ON mi.id = oi.menu_item_id
+            WHERE o.user_id = $1
+            GROUP BY o.id
+            ORDER BY o.order_date DESC
+            LIMIT $2 OFFSET $3
+            `,
+            [userId, limit, offset]
         );
-        const items = itemsResult.rows;
-        
-        const detailedItems = [];
-        for (const item of items) {
-            // Query 1+N+M: Get menu details for this item
-            const menuResult = await db.query(
-                'SELECT * FROM menu_items WHERE id = $1',
-                [item.menu_item_id]
-            );
-            detailedItems.push({
-                ...item,
-                menu_item: menuResult.rows[0]
-            });
-        }
-        
-        fullOrders.push({
-            ...order,
-            items: detailedItems
-        });
-    }
 
-    res.json({
-        user_id: userId,
-        total_orders: orders.length,
-        orders: fullOrders
-    });
+        res.json({
+            user_id: userId,
+            total_orders: result.rows.length,
+            orders: result.rows
+        });
+
+    } catch (err) {
+        console.error('Error fetching order history:', err);
+        res.status(500).json({ error: 'Failed to fetch order history' });
+    }
 };
 
 /**
  * Create a new order.
- * 
+ *
  * [PLANTED PERFORMANCE PROBLEM 2]
- * Synchronous Email sending. The response is blocked by a simulated 
+ * Synchronous Email sending. The response is blocked by a simulated
  * SMTP delay in every order creation.
  */
 const createOrder = async (req, res) => {
@@ -74,33 +84,48 @@ const createOrder = async (req, res) => {
         return res.status(400).json({ error: 'No items in order' });
     }
 
-    // Wrap in a simple transaction behavior (manual in pg-pool is a bit different, but using individual queries for now)
     try {
-        // 1. Calculate total
+        // Calculate total
         let total = 0;
+
         for (const item of items) {
             total += item.price * item.quantity;
         }
+
         total += delivery_fee;
 
-        // 2. Create the order
+        // Create order
         const orderResult = await db.query(
-            'INSERT INTO orders (user_id, restaurant_id, total_amount, delivery_fee) VALUES ($1, $2, $3, $4) RETURNING *',
+            `INSERT INTO orders
+            (user_id, restaurant_id, total_amount, delivery_fee)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *`,
             [userId, restaurant_id, total, delivery_fee]
         );
+
         const orderId = orderResult.rows[0].id;
 
-        // 3. Add order items
+        // Insert order items
         for (const item of items) {
             await db.query(
-                'INSERT INTO order_items (order_id, menu_item_id, quantity, unit_price, subtotal) VALUES ($1, $2, $3, $4, $5)',
-                [orderId, item.menu_item_id, item.quantity, item.price, item.price * item.quantity]
+                `INSERT INTO order_items
+                (order_id, menu_item_id, quantity, unit_price, subtotal)
+                VALUES ($1, $2, $3, $4, $5)`,
+                [
+                    orderId,
+                    item.menu_item_id,
+                    item.quantity,
+                    item.price,
+                    item.price * item.quantity
+                ]
             );
         }
 
-        // // Send confirmation email before responding
-        // [PLANTED PROBLEM]: This will block for 300-800ms
-        await emailService.sendConfirmation(orderId, req.user.email);
+        // PERFORMANCE ISSUE (Part B will fix this)
+        await emailService.sendConfirmation(
+            orderId,
+            req.user.email
+        );
 
         res.status(201).json({
             message: 'Order created successfully!',
@@ -123,7 +148,9 @@ const getOrderById = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-        return res.status(404).json({ error: 'Order not found' });
+        return res.status(404).json({
+            error: 'Order not found'
+        });
     }
 
     res.json(result.rows[0]);
