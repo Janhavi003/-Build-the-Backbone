@@ -1,6 +1,5 @@
 const db = require('../db');
-const emailService = require('../lib/emailService');
-
+const emailQueue = require('../queues/email.queue');
 /**
  * Get Order History for the authenticated user.
  *
@@ -121,11 +120,14 @@ const createOrder = async (req, res) => {
             );
         }
 
-        // PERFORMANCE ISSUE (Part B will fix this)
-        await emailService.sendConfirmation(
-            orderId,
-            req.user.email
-        );
+        // Queue email asynchronously
+await emailQueue.add(
+    'send-confirmation',
+    {
+        orderId,
+        userEmail: req.user.email
+    }
+);
 
         res.status(201).json({
             message: 'Order created successfully!',
