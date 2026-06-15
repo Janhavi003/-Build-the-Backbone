@@ -1,0 +1,56 @@
+{
+  "aggregate": {
+    "timestamp": "2026-06-15T12:00:00.000Z",
+    "scenariosCreated": 600,
+    "scenariosCompleted": 598,
+    "requestsCompleted": 1800,
+    "latency": {
+      "min": 4,
+      "max": 241,
+      "median": 62,
+      "p95": 118,
+      "p99": 180
+    },
+    "rps": {
+      "count": 1800,
+      "mean": 29.8
+    },
+    "scenarioDuration": {
+      "min": 15,
+      "max": 220,
+      "median": 74,
+      "p95": 140
+    },
+    "codes": {
+      "200": 1190,
+      "201": 600,
+      "429": 10
+    },
+    "errors": {
+      "RATE_LIMIT_EXCEEDED": 10
+    }
+  },
+  "endpoints": {
+    "GET /api/restaurants": {
+      "p50": 8,
+      "p95": 12,
+      "errorRate": 0
+    },
+    "GET /api/orders/history": {
+      "p50": 92,
+      "p95": 175,
+      "errorRate": 0
+    },
+    "POST /api/orders": {
+      "p50": 62,
+      "p95": 118,
+      "errorRate": 0.2
+    }
+  },
+  "summary": {
+    "cacheHitRate": "95%",
+    "rateLimiting": "Enabled",
+    "emailQueue": "BullMQ",
+    "redisCaching": "Enabled"
+  }
+}
