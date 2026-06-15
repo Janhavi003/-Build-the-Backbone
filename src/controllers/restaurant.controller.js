@@ -1,35 +1,95 @@
+
 const db = require('../db');
+const redis = require('../lib/redis');
 
 /**
  * Get List of Restaurants with filters.
  *
- * [PLANTED PERFORMANCE PROBLEM 3]
- * Missing indexes on WHERE and JOIN columns in the database.
- * This query will scan the full table even with a simple city filter.
+ * PART B FIX:
+ * Redis Cache-Aside Pattern
+ * - Check Redis first
+ * - On cache miss, query DB and cache result
+ * - TTL = 300 seconds (5 minutes)
  */
 const getRestaurants = async (req, res) => {
-    const { city, limit = 20, offset = 0 } = req.query;
+    const {
+        city,
+        limit = 20,
+        offset = 0,
+        page = 1,
+        sort = 'rating'
+    } = req.query;
 
-    let queryStr = 'SELECT * FROM restaurants';
-    const params = [];
+    const cacheKey =
+        `restaurants:city=${city || 'all'}:page=${page}:limit=${limit}:sort=${sort}`;
 
-    if (city) {
-        queryStr += ' WHERE city = $1';
-        params.push(city);
+    try {
+        // Check cache first
+        const cachedData = await redis.get(cacheKey);
 
-        queryStr += ' LIMIT $2 OFFSET $3';
-        params.push(limit, offset);
-    } else {
-        queryStr += ' LIMIT $1 OFFSET $2';
-        params.push(limit, offset);
+        if (cachedData) {
+            res.set('X-Cache', 'HIT');
+
+            return res.json(JSON.parse(cachedData));
+        }
+
+        let queryStr = 'SELECT * FROM restaurants';
+        const params = [];
+
+        if (city) {
+            queryStr += ' WHERE city = $1';
+            params.push(city);
+
+            queryStr += ' LIMIT $2 OFFSET $3';
+            params.push(limit, offset);
+        } else {
+            queryStr += ' LIMIT $1 OFFSET $2';
+            params.push(limit, offset);
+        }
+
+        const result = await db.query(queryStr, params);
+
+        const responseData = {
+            total: result.rowCount,
+            restaurants: result.rows
+        };
+
+        // Store in cache for 5 minutes
+        await redis.setex(
+            cacheKey,
+            300,
+            JSON.stringify(responseData)
+        );
+
+        res.set('X-Cache', 'MISS');
+
+        res.json(responseData);
+
+    } catch (err) {
+        console.error('[Cache] Error:', err.message);
+
+        // Fallback to database if Redis is unavailable
+        let queryStr = 'SELECT * FROM restaurants';
+        const params = [];
+
+        if (city) {
+            queryStr += ' WHERE city = $1';
+            params.push(city);
+
+            queryStr += ' LIMIT $2 OFFSET $3';
+            params.push(limit, offset);
+        } else {
+            queryStr += ' LIMIT $1 OFFSET $2';
+            params.push(limit, offset);
+        }
+
+        const result = await db.query(queryStr, params);
+
+        res.json({
+            total: result.rowCount,
+            restaurants: result.rows
+        });
     }
-
-    const result = await db.query(queryStr, params);
-
-    res.json({
-        total: result.rowCount,
-        restaurants: result.rows
-    });
 };
 
 /**
